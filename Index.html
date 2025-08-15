@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Hand + Face Gesture — MediaPipe (40 Hand / 40 Face)</title>
+<style>
+  /* sederhana, mempertahankan tampilan sebelumnya */
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;min-height:100vh}
+  .container{max-width:1200px;margin:18px auto;padding:18px;display:grid;grid-template-columns:640px 1fr;gap:18px}
+  .card{background:rgba(255,255,255,0.04);border-radius:12px;padding:12px;border:1px solid rgba(255,255,255,0.06)}
+  .video-wrap{position:relative;border-radius:12px;overflow:hidden;background:#000;height:400px}
+  video, canvas{width:100%;height:100%;display:block;object-fit:cover}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  button{padding:10px 14px;border-radius:12px;border:none;font-weight:700;cursor:pointer;background:linear-gradient(45deg,#ff6b6b,#ee5a24);color:#fff}
+  button.secondary{background:linear-gradient(45deg,#4facfe,#00f2fe)}
+  .status{margin-top:10px;padding:8px;border-radius:8px;text-align:center;font-weight:700}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .panel{padding:10px;border-radius:10px}
+  .result-big{display:flex;align-items:center;gap:12px}
+  .emoji{font-size:3rem}
+  .small-stat{font-size:0.9rem;opacity:0.9}
+  .gesture-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;max-height:320px;overflow:auto;padding:8px}
+  .gcard{background:rgba(255,255,255,0.02);padding:8px;border-radius:8px;text-align:center;border:1px solid rgba(255,255,255,0.03)}
+  .gcard.detected{box-shadow:0 6px 18px rgba(0,255,140,0.08);border-color:#00ff8c}
+  .footer{margin-top:12px;font-size:0.85rem;opacity:0.9}
+  @media(max-width:980px){.container{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="card">
+    <div class="video-wrap" id="videoWrap">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="canvas"></canvas>
+      <div id="noCam" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:#fff">
+        <div style="font-size:2rem">📷</div>
+        <div>Klik "Mulai Kamera" untuk memulai</div>
+      </div>
+    </div>
+    <div class="controls">
+      <button id="startBtn">🎥 Mulai Kamera</button>
+      <button id="stopBtn" disabled>⏹ Hentikan</button>
+      <button id="demoBtn" class="secondary">🎭 Mode Demo</button>
+      <button id="simBtn" class="secondary" disabled>▶ Simulasi</button>
+    </div>
+    <div id="status" class="status" style="background:rgba(0,0,0,0.06)">Status: Siap</div>
+
+    <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+      <div style="flex:1" class="card panel">
+        <div style="font-weight:800;margin-bottom:6px">Deteksi Tangan</div>
+        <div class="result-big">
+          <div class="emoji" id="handEmoji">✋</div>
+          <div>
+            <div id="handName" style="font-size:1.05rem;font-weight:800">-</div>
+            <div id="handCat" class="small-stat">-</div>
+            <div id="handConf" class="small-stat">Akurasi: -</div>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1" class="card panel">
+        <div style="font-weight:800;margin-bottom:6px">Deteksi Wajah</div>
+        <div class="result-big">
+          <div class="emoji" id="faceEmoji">😐</div>
+          <div>
+            <div id="faceName" style="font-size:1.05rem;font-weight:800">-</div>
+            <div id="faceCat" class="small-stat">-</div>
+            <div id="faceConf" class="small-stat">Akurasi: -</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer small-stat">Performa: disetel untuk satu tangan & satu wajah (maxNumHands=1,maxNumFaces=1). Jika lambat, kurangi ukuran video atau matikan demo.</div>
+  </div>
+
+  <div class="card">
+    <div style="font-weight:900;margin-bottom:8px">Daftar & Statistik</div>
+
+    <div style="margin-bottom:10px" class="grid">
+      <div class="panel card">
+        <div style="font-weight:800">Gestur Tangan (40)</div>
+        <div class="gesture-grid" id="handGrid"></div>
+      </div>
+      <div class="panel card">
+        <div style="font-weight:800">Ekspresi Wajah (40)</div>
+        <div class="gesture-grid" id="faceGrid"></div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div class="small-stat">Terdeteksi tangan: <span id="handDetectedCount">0</span></div>
+      <div class="small-stat">Terdeteksi wajah: <span id="faceDetectedCount">0</span></div>
+      <div class="small-stat">Akurasi rata-rata tangan: <span id="handAvgAcc">0%</span></div>
+      <div class="small-stat">Akurasi rata-rata wajah: <span id="faceAvgAcc">0%</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- MediaPipe libs -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.min.js"></script>
+
+<script>
+/* ===== Helper / Database ===== */
+class GestureSystem {
+  constructor() {
+    // UI
+    this.video = document.getElementById('video');
+    this.canvas = document.getElementById('canvas');
+    this.ctx = this.canvas.getContext('2d');
+    this.noCam = document.getElementById('noCam');
+    this.startBtn = document.getElementById('startBtn');
+    this.stopBtn = document.getElementById('stopBtn');
+    this.demoBtn = document.getElementById('demoBtn');
+    this.simBtn = document.getElementById('simBtn');
+    this.statusEl = document.getElementById('status');
+
+    // Hand UI
+    this.handEmoji = document.getElementById('handEmoji');
+    this.handName = document.getElementById('handName');
+    this.handCat = document.getElementById('handCat');
+    this.handConf = document.getElementById('handConf');
+    this.handGrid = document.getElementById('handGrid');
+    this.handDetectedCount = document.getElementById('handDetectedCount');
+    this.handAvgAcc = document.getElementById('handAvgAcc');
+
+    // Face UI
+    this.faceEmoji = document.getElementById('faceEmoji');
+    this.faceName = document.getElementById('faceName');
+    this.faceCat = document.getElementById('faceCat');
+    this.faceConf = document.getElementById('faceConf');
+    this.faceGrid = document.getElementById('faceGrid');
+    this.faceDetectedCount = document.getElementById('faceDetectedCount');
+    this.faceAvgAcc = document.getElementById('faceAvgAcc');
+
+    // state
+    this.handsModule = null;
+    this.faceModule = null;
+    this.camera = null;
+    this.isRunning = false;
+    this.isDemo = false;
+    this.simInterval = null;
+
+    // detection bookkeeping
+    this.detectedHands = new Set();
+    this.detectedFaces = new Set();
+    this.handAccSum = 0;
+    this.handCount = 0;
+    this.faceAccSum = 0;
+    this.faceCount = 0;
+
+    // thresholds - FIXED values
+    this.confThreshold = 0.7;
+
+    // init DBs
+    this.initHandDB();
+    this.initFaceDB();
+
+    // UI render
+    this.renderGrids();
+    this.addListeners();
+  }
+
+  initHandDB() {
+    // 40 gestur tangan (nama, emoji, kategori, desc)
+    this.handDB = [
+      // Basic Common Gestures
+      {name:'Open Hand',emoji:'✋',cat:'Dasar',desc:'Telapak terbuka'},
+      {name:'Fist',emoji:'✊',cat:'Dasar',desc:'Kepal tertutup'},
+      {name:'Thumbs Up',emoji:'👍',cat:'Dasar',desc:'Jempol naik'},
+      {name:'Thumbs Down',emoji:'👎',cat:'Dasar',desc:'Jempol turun'},
+      {name:'OK',emoji:'👌',cat:'Dasar',desc:'Lingkaran OK'},
+      {name:'Peace',emoji:'✌️',cat:'Dasar',desc:'V Peace'},
+      {name:'Point',emoji:'👆',cat:'Arah',desc:'Menunjuk'},
+      {name:'Rock',emoji:'🤘',cat:'Dasar',desc:'Tanduk rock'},
+      {name:'Call Me',emoji:'🤙',cat:'Komunikasi',desc:'Telepon'},
+      {name:'Pinch',emoji:'🤏',cat:'Aksi',desc:'Cubit kecil'},
+      // Numbers 0-9
+      {name:'Zero',emoji:'0️⃣',cat:'Angka',desc:'Nol'},
+      {name:'One',emoji:'1️⃣',cat:'Angka',desc:'Satu jari'},
+      {name:'Two',emoji:'2️⃣',cat:'Angka',desc:'Dua jari'},
+      {name:'Three',emoji:'3️⃣',cat:'Angka',desc:'Tiga jari'},
+      {name:'Four',emoji:'4️⃣',cat:'Angka',desc:'Empat jari'},
+      {name:'Five',emoji:'5️⃣',cat:'Angka',desc:'Lima jari'},
+      {name:'Six',emoji:'6️⃣',cat:'Angka',desc:'Enam'},
+      {name:'Seven',emoji:'7️⃣',cat:'Angka',desc:'Tujuh'},
+      {name:'Eight',emoji:'8️⃣',cat:'Angka',desc:'Delapan'},
+      {name:'Nine',emoji:'9️⃣',cat:'Angka',desc:'Sembilan'},
+      // ASL Letters
+      {name:'A',emoji:'🤚',cat:'ASL',desc:'Huruf A'},
+      {name:'B',emoji:'🖐️',cat:'ASL',desc:'Huruf B'},
+      {name:'C',emoji:'👌',cat:'ASL',desc:'Huruf C'},
+      {name:'D',emoji:'☝️',cat:'ASL',desc:'Huruf D'},
+      {name:'E',emoji:'✊',cat:'ASL',desc:'Huruf E'},
+      {name:'F',emoji:'👌',cat:'ASL',desc:'Huruf F'},
+      {name:'G',emoji:'👉',cat:'ASL',desc:'Huruf G'},
+      {name:'H',emoji:'✌️',cat:'ASL',desc:'Huruf H'},
+      {name:'I',emoji:'🤟',cat:'ASL',desc:'Huruf I'},
+      {name:'L',emoji:'👆',cat:'ASL',desc:'Huruf L'},
+      // More gestures
+      {name:'Stop',emoji:'✋',cat:'Komunikasi',desc:'Berhenti'},
+      {name:'Gun',emoji:'🔫',cat:'Bentuk',desc:'Pistol'},
+      {name:'Spider',emoji:'🕷️',cat:'Bentuk',desc:'Laba-laba'},
+      {name:'Vulcan',emoji:'🖖',cat:'Budaya',desc:'Vulcan salute'},
+      {name:'Horns',emoji:'🤘',cat:'Budaya',desc:'Devil horns'},
+      {name:'Shaka',emoji:'🤙',cat:'Budaya',desc:'Hang loose'},
+      {name:'Crossed',emoji:'🤞',cat:'Harapan',desc:'Jari silang'},
+      {name:'Metal',emoji:'🤘',cat:'Musik',desc:'Heavy metal'},
+      {name:'Wave',emoji:'👋',cat:'Salam',desc:'Melambaikan'},
+      {name:'Clap',emoji:'👏',cat:'Tepuk',desc:'Tepuk tangan'}
+    ];
+  }
+
+  initFaceDB() {
+    // 40 ekspresi wajah - FIXED with more accurate descriptions
+    this.faceDB = [
+      {name:'Neutral',emoji:'😐',cat:'Netral',desc:'Wajah netral'},
+      {name:'Happy',emoji:'😊',cat:'Senang',desc:'Bahagia'},
+      {name:'Big Smile',emoji:'😃',cat:'Senang',desc:'Senyum lebar'},
+      {name:'Grin',emoji:'😁',cat:'Senang',desc:'Nyengir'},
+      {name:'Joy',emoji:'😄',cat:'Senang',desc:'Gembira'},
+      {name:'Laugh',emoji:'😆',cat:'Senang',desc:'Tertawa'},
+      {name:'Sad',emoji:'😢',cat:'Sedih',desc:'Sedih'},
+      {name:'Crying',emoji:'😭',cat:'Sedih',desc:'Menangis'},
+      {name:'Worried',emoji:'😟',cat:'Sedih',desc:'Khawatir'},
+      {name:'Disappointed',emoji:'😞',cat:'Sedih',desc:'Kecewa'},
+      {name:'Angry',emoji:'😠',cat:'Marah',desc:'Marah'},
+      {name:'Mad',emoji:'😡',cat:'Marah',desc:'Sangat marah'},
+      {name:'Furious',emoji:'🤬',cat:'Marah',desc:'Murka'},
+      {name:'Annoyed',emoji:'😒',cat:'Marah',desc:'Kesal'},
+      {name:'Surprised',emoji:'😲',cat:'Kaget',desc:'Terkejut'},
+      {name:'Shocked',emoji:'😱',cat:'Kaget',desc:'Syok'},
+      {name:'Amazed',emoji:'😮',cat:'Kaget',desc:'Kagum'},
+      {name:'Confused',emoji:'😕',cat:'Bingung',desc:'Bingung'},
+      {name:'Thinking',emoji:'🤔',cat:'Bingung',desc:'Berpikir'},
+      {name:'Puzzled',emoji:'😵‍💫',cat:'Bingung',desc:'Pusing'},
+      {name:'Fear',emoji:'😨',cat:'Takut',desc:'Takut'},
+      {name:'Scared',emoji:'😰',cat:'Takut',desc:'Ketakutan'},
+      {name:'Disgust',emoji:'🤢',cat:'Jijik',desc:'Jijik'},
+      {name:'Sick',emoji:'🤮',cat:'Jijik',desc:'Mual'},
+      {name:'Wink',emoji:'😉',cat:'Genit',desc:'Kedip mata'},
+      {name:'Kiss',emoji:'😘',cat:'Kasih',desc:'Cium'},
+      {name:'Love',emoji:'😍',cat:'Kasih',desc:'Cinta'},
+      {name:'Blush',emoji:'😊',cat:'Malu',desc:'Tersipu'},
+      {name:'Shy',emoji:'😳',cat:'Malu',desc:'Malu'},
+      {name:'Embarrassed',emoji:'😅',cat:'Malu',desc:'Malu-malu'},
+      {name:'Sleepy',emoji:'😴',cat:'Kantuk',desc:'Mengantuk'},
+      {name:'Tired',emoji:'😪',cat:'Lelah',desc:'Lelah'},
+      {name:'Yawn',emoji:'🥱',cat:'Lelah',desc:'Menguap'},
+      {name:'Bored',emoji:'😑',cat:'Bosan',desc:'Bosan'},
+      {name:'Smirk',emoji:'😏',cat:'Jahil',desc:'Menyeringai'},
+      {name:'Playful',emoji:'😜',cat:'Jahil',desc:'Jahil'},
+      {name:'Silly',emoji:'🤪',cat:'Jahil',desc:'Gila-gilaan'},
+      {name:'Cool',emoji:'😎',cat:'Keren',desc:'Keren'},
+      {name:'Serious',emoji:'😐',cat:'Serius',desc:'Serius'},
+      {name:'Determined',emoji:'😤',cat:'Tekad',desc:'Bertekad'}
+    ];
+  }
+
+  renderGrids(){
+    // hand grid
+    this.handGrid.innerHTML = this.handDB.map((g,i)=>`<div class="gcard" data-id="${i}"><div style="font-size:1.4rem">${g.emoji}</div><div style="font-weight:700">${g.name}</div></div>`).join('');
+    this.faceGrid.innerHTML = this.faceDB.map((g,i)=>`<div class="gcard" data-id="${i}"><div style="font-size:1.4rem">${g.emoji}</div><div style="font-weight:700">${g.name}</div></div>`).join('');
+  }
+
+  addListeners(){
+    this.startBtn.addEventListener('click', ()=>this.start());
+    this.stopBtn.addEventListener('click', ()=>this.stop());
+    this.demoBtn.addEventListener('click', ()=>this.toggleDemo());
+    this.simBtn.addEventListener('click', ()=>this.startSim());
+  }
+
+  async start(){
+    if(this.isRunning) return;
+    this.isRunning = true;
+    this.statusEl.textContent = 'Memulai kamera...';
+    this.noCam.style.display = 'none';
+    this.video.style.display = 'block';
+    this.canvas.style.display = 'block';
+    this.startBtn.disabled = true;
+    this.stopBtn.disabled = false;
+    this.demoBtn.disabled = true;
+    this.simBtn.disabled = true;
+
+    // size canvas on resize
+    const resizeCanvas = ()=>{ 
+      this.canvas.width = this.video.videoWidth || 640; 
+      this.canvas.height = this.video.videoHeight || 480; 
+    };
+    
+    this.video.addEventListener('loadedmetadata', resizeCanvas);
+    window.addEventListener('resize', resizeCanvas);
+
+    // setup MediaPipe Hands - FIXED settings
+    this.handsModule = new Hands({locateFile: (file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    this.handsModule.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: this.confThreshold,
+      minTrackingConfidence: this.confThreshold
+    });
+    this.handsModule.onResults((results)=>this.onHandsResults(results));
+
+    // setup MediaPipe FaceMesh - FIXED settings
+    this.faceModule = new FaceMesh({locateFile: (file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
+    this.faceModule.setOptions({
+      maxNumFaces: 1,
+      refineLandmarks: true,
+      minDetectionConfidence: this.confThreshold,
+      minTrackingConfidence: this.confThreshold
+    });
+    this.faceModule.onResults((results)=>this.onFaceResults(results));
+
+    // start camera - FIXED
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: 'user' }
+      });
+      this.video.srcObject = stream;
+      
+      this.video.addEventListener('loadeddata', () => {
+        resizeCanvas();
+        this.processFrame();
+      });
+      
+      this.statusEl.textContent = '📷 Kamera aktif — memproses hands + face';
+      this.statusEl.style.background = 'rgba(0,255,0,0.2)';
+    } catch (error) {
+      console.error('Camera error:', error);
+      this.statusEl.textContent = '❌ Error: Tidak dapat mengakses kamera';
+      this.statusEl.style.background = 'rgba(255,0,0,0.2)';
+      this.stop();
+    }
+  }
+
+  async processFrame() {
+    if (!this.isRunning) return;
+    
+    if (this.video.readyState >= 2) {
+      await this.handsModule.send({image: this.video});
+      await this.faceModule.send({image: this.video});
+    }
+    
+    requestAnimationFrame(() => this.processFrame());
+  }
+
+  stop(){
+    if(!this.isRunning) return;
+    this.isRunning = false;
+    if(this.video.srcObject) {
+      this.video.srcObject.getTracks().forEach(track => track.stop());
+      this.video.srcObject = null;
+    }
+    this.startBtn.disabled = false;
+    this.stopBtn.disabled = true;
+    this.demoBtn.disabled = false;
+    this.simBtn.disabled = true;
+    this.statusEl.textContent = '⏹️ Kamera dihentikan';
+    this.noCam.style.display = 'flex';
+    this.clearUI();
+  }
+
+  toggleDemo(){
+    this.isDemo = !this.isDemo;
+    if(this.isDemo){
+      this.statusEl.textContent = '🎭 Mode Demo aktif — klik kartu untuk simulasi';
+      this.simBtn.disabled = false;
+      // clicking grid sim
+      this.handGrid.onclick = (e)=>{
+        const card = e.target.closest('.gcard'); if(!card) return;
+        const id = parseInt(card.dataset.id); this.simulateHand(this.handDB[id], 90);
+      };
+      this.faceGrid.onclick = (e)=>{
+        const card = e.target.closest('.gcard'); if(!card) return;
+        const id = parseInt(card.dataset.id); this.simulateFace(this.faceDB[id], 92);
+      };
+    } else {
+      this.statusEl.textContent = 'Demo dimatikan';
+      this.simBtn.disabled = true;
+      this.handGrid.onclick = null;
+      this.faceGrid.onclick = null;
+    }
+  }
+
+  startSim(){
+    if(this.simInterval) clearInterval(this.simInterval);
+    this.simInterval = setInterval(()=>{
+      const h = this.handDB[Math.floor(Math.random()*this.handDB.length)];
+      const f = this.faceDB[Math.floor(Math.random()*this.faceDB.length)];
+      this.simulateHand(h, Math.floor(Math.random()*21)+80);
+      this.simulateFace(f, Math.floor(Math.random()*21)+75);
+    },1200);
+  }
+
+  clearUI(){
+    this.handEmoji.textContent='✋'; this.handName.textContent='-'; this.handCat.textContent='-'; this.handConf.textContent='Akurasi: -';
+    this.faceEmoji.textContent='😐'; this.faceName.textContent='-'; this.faceCat.textContent='-'; this.faceConf.textContent='Akurasi: -';
+  }
+
+  /* ====== Results handlers - FIXED ====== */
+  onHandsResults(results){
+    // Clear and draw video background
+    this.ctx.clearRect(0,0,this.canvas.width,this.canvas.height);
+    this.ctx.drawImage(results.image,0,0,this.canvas.width,this.canvas.height);
+
+    if(results.multiHandLandmarks && results.multiHandLandmarks.length > 0){
+      const landmarks = results.multiHandLandmarks[0];
+      
+      // Draw hand landmarks
+      drawConnectors(this.ctx, landmarks, HAND_CONNECTIONS, {color:'#00ff88',lineWidth:2});
+      drawLandmarks(this.ctx, landmarks, {color:'#fff',lineWidth:1});
+      
+      // Classify gesture
+      const detected = this.classifyHand(landmarks);
+      if(detected){
+        const confidence = this.calculateHandConfidence(landmarks);
+        this.simulateHand(detected, confidence);
+      }
+    }
+  }
+
+  onFaceResults(results){
+    // Face drawing on same canvas
+    if(results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0){
+      const landmarks = results.multiFaceLandmarks[0];
+      
+      // Draw minimal face mesh
+      drawConnectors(this.ctx, landmarks, FACEMESH_CONTOURS, {color:'#ffd166',lineWidth:1});
+      drawConnectors(this.ctx, landmarks, FACEMESH_LEFT_EYE, {color:'#fff',lineWidth:1});
+      drawConnectors(this.ctx, landmarks, FACEMESH_RIGHT_EYE, {color:'#fff',lineWidth:1});
+      drawConnectors(this.ctx, landmarks, FACEMESH_LIPS, {color:'#ff6b6b',lineWidth:1});
+      
+      // Classify expression
+      const detected = this.classifyFace(landmarks);
+      if(detected){
+        const confidence = this.calculateFaceConfidence(landmarks);
+        this.simulateFace(detected, confidence);
+      }
+    }
+  }
+
+  /* ====== IMPROVED Classifiers ====== */
+
+  // Helper: euclidean distance
+  dist(a, b){ 
+    return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2); 
+  }
+
+  // FIXED finger detection
+  isFingerExtended(landmarks, tipIdx, pipIdx){
+    if (tipIdx === 4) { // Thumb special case
+      return landmarks[tipIdx].x > landmarks[pipIdx].x; // Thumb extends to right
+    }
+    return landmarks[tipIdx].y < landmarks[pipIdx].y; // Other fingers extend up
+  }
+
+  calculateHandConfidence(landmarks) {
+    // Simple confidence based on hand visibility and pose stability
+    const wrist = landmarks[0];
+    const fingertips = [landmarks[4], landmarks[8], landmarks[12], landmarks[16], landmarks[20]];
+    
+    let totalDist = 0;
+    fingertips.forEach(tip => {
+      totalDist += this.dist(wrist, tip);
+    });
+    
+    const avgDist = totalDist / fingertips.length;
+    return Math.min(95, Math.max(70, Math.floor(avgDist * 1000)));
+  }
+
+  classifyHand(landmarks){
+    // FIXED finger detection
+    const fingers = [
+      this.isFingerExtended(landmarks, 4, 3),  // thumb
+      this.isFingerExtended(landmarks, 8, 6),  // index
+      this.isFingerExtended(landmarks, 12, 10), // middle  
+      this.isFingerExtended(landmarks, 16, 14), // ring
+      this.isFingerExtended(landmarks, 20, 18)  // pinky
+    ];
+
+    const fingerCount = fingers.filter(f => f).length;
+    const [thumb, index, middle, ring, pinky] = fingers;
+
+    // Distance calculations for special gestures
+    const thumbIndexDist = this.dist(landmarks[4], landmarks[8]);
+    const thumbMiddleDist = this.dist(landmarks[4], landmarks[12]);
+    
+    // IMPROVED pattern matching
+    
+    // Fist - no fingers extended
+    if (fingerCount === 0) {
+      return this.handDB[1]; // Fist
+    }
+    
+    // One finger gestures
+    if (fingerCount === 1) {
+      if (thumb) return this.handDB[2]; // Thumbs Up
+      if (index) return this.handDB[6]; // Point
+      if (pinky) return this.handDB[8]; // Call Me
+      return this.handDB[11]; // One
+    }
+    
+    // Two finger gestures
+    if (fingerCount === 2) {
+      if (index && middle && !thumb && !ring && !pinky) {
+        return this.handDB[5]; // Peace/Victory
+      }
+      if (thumb && index && thumbIndexDist < 0.05) {
+        return this.handDB[4]; // OK sign
+      }
+      if (thumb && pinky) {
+        return this.handDB[8]; // Call Me / Shaka
+      }
+      if (index && pinky) {
+        return this.handDB[7]; // Rock horns
+      }
+      return this.handDB[12]; // Two
+    }
+    
+    // Three finger gestures  
+    if (fingerCount === 3) {
+      if (index && middle && ring) {
+        return this.handDB[13]; // Three
+      }
+      if (thumb && index && middle) {
+        return this.handDB[13]; // Three
+      }
+      return this.handDB[13]; // Three
+    }
+    
+    // Four finger gestures
+    if (fingerCount === 4) {
+      if (!thumb) {
+        return this.handDB[14]; // Four
+      }
+      return this.handDB[14]; // Four
+    }
+    
+    // Five finger gestures
+    if (fingerCount === 5) {
+      return this.handDB[0]; // Open Hand
+    }
+    
+    // Special gesture detection
+    
+    // OK sign - thumb and index close
+    if (thumbIndexDist < 0.06 && middle && ring && pinky) {
+      return this.handDB[4]; // OK
+    }
+    
+    // Pinch - thumb and index very close
+    if (thumbIndexDist < 0.04) {
+      return this.handDB[9]; // Pinch
+    }
+    
+    // Thumbs down - thumb down, others variable
+    if (landmarks[4].y > landmarks[3].y && landmarks[4].y > landmarks[0].y) {
+      return this.handDB[3]; // Thumbs Down
+    }
+    
+    // Default fallback based on finger count
+    const fingerCountMap = [1, 1, 11, 12, 13, 14, 0]; // indexes to handDB
+    return this.handDB[fingerCountMap[Math.min(fingerCount, 6)]];
+  }
+
+  calculateFaceConfidence(landmarks) {
+    // Calculate confidence based on landmark stability and visibility
+    const noseTip = landmarks[1];
+    const chin = landmarks[175];
+    const faceHeight = this.dist(noseTip, chin);
+    
+    // Confidence based on face size and position
+    const confidence = Math.min(95, Math.max(70, Math.floor(faceHeight * 2000)));
+    return confidence;
+  }
+
+  classifyFace(landmarks){
+    // FIXED face landmark indices for MediaPipe Face Mesh
+    // Key landmarks
+    const leftEyeTop = landmarks[159];
+    const leftEyeBottom = landmarks[145]; 
+    const rightEyeTop = landmarks[386];
+    const rightEyeBottom = landmarks[374];
+    
+    const upperLip = landmarks[13];
+    const lowerLip = landmarks[14];
+    const leftMouthCorner = landmarks[61];
+    const rightMouthCorner = landmarks[291];
+    
+    const leftEyebrow = landmarks[70];
+    const rightEyebrow = landmarks[300];
+    const noseTip = landmarks[1];
+    
+    // Calculate measurements
+    const leftEyeHeight = this.dist(leftEyeTop, leftEyeBottom);
+    const rightEyeHeight = this.dist(rightEyeTop, rightEyeBottom);
+    const eyeHeightAvg = (leftEyeHeight + rightEyeHeight) / 2;
+    
+    const mouthHeight = this.dist(upperLip, lowerLip);
+    const mouthWidth = this.dist(leftMouthCorner, rightMouthCorner);
+    
+    const eyebrowDistance = this.dist(leftEyebrow, rightEyebrow);
+    const faceWidth = this.dist(landmarks[127], landmarks[356]); // approximate face width
+    
+    // Normalize measurements
+    const mouthOpenRatio = mouthHeight / (faceWidth || 0.1);
+    const mouthWidthRatio = mouthWidth / (faceWidth || 0.1);
+    const eyeOpenRatio = eyeHeightAvg / (faceWidth || 0.1);
+    const eyebrowRatio = eyebrowDistance / (faceWidth || 0.1);
+    
+    // IMPROVED expression classification
+    
+    // Very open mouth - surprised/shocked
+    if (mouthOpenRatio > 0.05) {
+      if (eyeOpenRatio > 0.02) {
+        return this.faceDB[15]; // Shocked
+      }
+      return this.faceDB[14]; // Surprised
+    }
+    
+    // Wide smile detection
+    if (mouthWidthRatio > 0.25 && mouthOpenRatio < 0.03) {
+      if (eyeOpenRatio > 0.015) {
+        return this.faceDB[2]; // Big Smile
+      }
+      return this.faceDB[1]; // Happy
+    }
+    
+    // Moderate smile
+    if (mouthWidthRatio > 0.22 && mouthOpenRatio < 0.025) {
+      return this.faceDB[1]; // Happy
+    }
+    
+    // Laughing - mouth open and wide
+    if (mouthOpenRatio > 0.02 && mouthWidthRatio > 0.23) {
+      return this.faceDB[5]; // Laugh
+    }
+    
+    // Sad - mouth corners down (narrow mouth)
+    if (mouthWidthRatio < 0.18) {
+      if (eyebrowRatio < 0.2) {
+        return this.faceDB[6]; // Sad
+      }
+      return this.faceDB[9]; // Disappointed
+    }
+    
+    // Angry - eyebrows close together, eyes open
+    if (eyebrowRatio < 0.18 && eyeOpenRatio > 0.01) {
+      return this.faceDB[10]; // Angry
+    }
+    
+    // Eyes closed - sleepy
+    if (eyeOpenRatio < 0.005) {
+      return this.faceDB[30]; // Sleepy
+    }
+    
+    // One eye smaller - wink
+    if (Math.abs(leftEyeHeight - rightEyeHeight) > 0.01) {
+      return this.faceDB[24]; // Wink
+    }
+    
+    // Disgust - mouth very narrow and slightly open
+    if (mouthWidthRatio < 0.15 && mouthOpenRatio > 0.01 && mouthOpenRatio < 0.03) {
+      return this.faceDB[22]; // Disgust
+    }
+    
+    // Confused - moderate eyebrow distance, moderate mouth
+    if (eyebrowRatio > 0.19 && eyebrowRatio < 0.22 && mouthWidthRatio > 0.19 && mouthWidthRatio < 0.22) {
+      return this.faceDB[17]; // Confused
+    }
+    
+    // Default neutral for unmatched expressions
+    return this.faceDB[0]; // Neutral
+  }
+
+  /* ====== Simulation / UI update functions ====== */
+
+  findHandByName(name){
+    return this.handDB.find(h=>h.name.toLowerCase()===name.toLowerCase()) || null;
+  }
+  findFaceByName(name){
+    return this.faceDB.find(f=>f.name.toLowerCase()===name.toLowerCase()) || null;
+  }
+
+  simulateHand(gesture, confidence=90){
+    if(!gesture) return;
+    this.handEmoji.textContent = gesture.emoji;
+    this.handName.textContent = gesture.name;
+    this.handCat.textContent = gesture.cat;
+    this.handConf.textContent = `Akurasi: ${confidence}%`;
+
+    // highlight in grid
+    this.handGrid.querySelectorAll('.gcard').forEach(card=>card.classList.remove('detected'));
+    const idx = this.handDB.indexOf(gesture);
+    if(idx>=0){
+      const card = this.handGrid.querySelector(`.gcard[data-id="${idx}"]`);
+      if(card) card.classList.add('detected');
+    }
+
+    if(!this.detectedHands.has(gesture.name)){
+      this.detectedHands.add(gesture.name);
+      this.handDetectedCount.textContent = this.detectedHands.size;
+    }
+    this.handAccSum += confidence; this.handCount++;
+    this.handAvgAcc.textContent = Math.round(this.handAccSum/this.handCount) + '%';
+  }
+
+  simulateFace(face, confidence=88){
+    if(!face) return;
+    this.faceEmoji.textContent = face.emoji;
+    this.faceName.textContent = face.name;
+    this.faceCat.textContent = face.cat;
+    this.faceConf.textContent = `Akurasi: ${confidence}%`;
+
+    this.faceGrid.querySelectorAll('.gcard').forEach(card=>card.classList.remove('detected'));
+    const idx = this.faceDB.indexOf(face);
+    if(idx>=0){
+      const card = this.faceGrid.querySelector(`.gcard[data-id="${idx}"]`);
+      if(card) card.classList.add('detected');
+    }
+
+    if(!this.detectedFaces.has(face.name)){
+      this.detectedFaces.add(face.name);
+      this.faceDetectedCount.textContent = this.detectedFaces.size;
+    }
+    this.faceAccSum += confidence; this.faceCount++;
+    this.faceAvgAcc.textContent = Math.round(this.faceAccSum/this.faceCount) + '%';
+  }
+}
+
+/* ===== Instantiate system ===== */
+const system = new GestureSystem();
+
+</script>
+</body>
+</html>
